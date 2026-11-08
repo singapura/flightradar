@@ -3,7 +3,8 @@
 Live air traffic shown on a full-screen radar scope in your browser, styled after the old green phosphor screens.
 
 - Rotating sweep: aircraft positions only update when the sweep passes them, then fade, like a real radar
-- Labels with callsign, flight level, climb/descent arrow and ground speed; emergency squawks (7500/7600/7700) show in red
+- Labels with callsign, flight level, climb/descent arrow and ground speed; emergency squawks (7500/7600/7700) blink in amber
+- Follow a flight: it shows in red with a pulsing marker and stays pinned at the top of the list. Outside the range, a red arrow on the rim points to it with its distance (looked up worldwide by callsign, registration or ICAO hex)
 - Traffic list sorted by distance, plus a detail panel per aircraft
 - Country borders (dashed), coastlines and major cities; at 100 NM and up, city names appear on hover
 - Range from 5 to 250 NM
@@ -25,12 +26,13 @@ The small server is needed because the public ADS-B feeds don't allow browsers t
 | Key / action | Effect |
 |---|---|
 | Mouse wheel, `+` / `-` | Change range |
-| Click aircraft | Show details |
+| Click aircraft | Show details, with a FOLLOW / UNFOLLOW button |
+| Click the red FOLLOW line (top left) | Stop following |
 | `L` | Toggle aircraft labels |
 | `M` | Toggle borders and cities |
 | `P` | Toggle traffic panel |
 | `F` | Fullscreen |
-| SET button | Location, sweep speed, refresh rate, filters |
+| SET button | Location, sweep speed, refresh rate, filters, flight to follow |
 
 ## Data sources
 

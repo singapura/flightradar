@@ -41,8 +41,61 @@ async function fetchAircraft(lat, lon, dist) {
   throw lastErr;
 }
 
+// Look up one aircraft anywhere in the world by callsign, registration or ICAO hex.
+const FIND = [
+  { name: "adsb.lol", urls: (q) => [`https://api.adsb.lol/v2/callsign/${q}`, `https://api.adsb.lol/v2/reg/${q}`, `https://api.adsb.lol/v2/hex/${q}`] },
+  { name: "adsb.fi", urls: (q) => [`https://opendata.adsb.fi/api/v2/callsign/${q}`, `https://opendata.adsb.fi/api/v2/registration/${q}`, `https://opendata.adsb.fi/api/v2/hex/${q}`] },
+];
+async function findAircraft(q) {
+  const key = "find:" + q;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.t < CACHE_MS) return hit.data;
+  const isHex = /^[0-9a-f]{6}$/i.test(q);
+  let lastErr;
+  for (const src of FIND) {
+    try {
+      let urls = src.urls(encodeURIComponent(q));
+      if (!isHex) urls = urls.slice(0, 2);
+      for (const u of urls) {
+        const res = await fetch(u, { headers: { "User-Agent": "flight-radar-local/1.0" }, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`${src.name} HTTP ${res.status}`);
+        const json = await res.json();
+        const ac = json.ac || json.aircraft || [];
+        if (ac.length) {
+          const data = { source: src.name, ac };
+          cache.set(key, { t: Date.now(), data });
+          return data;
+        }
+      }
+      const data = { source: src.name, ac: [] };
+      cache.set(key, { t: Date.now(), data });
+      return data;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === "/api/find") {
+    const q = (url.searchParams.get("q") || "").trim().toUpperCase();
+    if (!/^[A-Z0-9-]{2,10}$/.test(q)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "q must be a callsign, registration or hex" }));
+    }
+    try {
+      const data = await findAircraft(q);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(e.message || e) }));
+    }
+    return;
+  }
 
   if (url.pathname === "/api/aircraft") {
     const lat = parseFloat(url.searchParams.get("lat"));

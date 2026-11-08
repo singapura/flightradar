@@ -12,7 +12,8 @@
     --phos: #39ff7a;
     --phos-dim: #1d8a43;
     --phos-faint: #0f3d20;
-    --alert: #ff4545;
+    --alert: #ff3b3b;
+    --emg: #ff9628;
     --sel: #ffe066;
     --panel: rgba(4, 20, 10, 0.86);
   }
@@ -47,7 +48,13 @@
     border-bottom: 1px solid rgba(15,61,32,0.5); }
   .row:hover { background: rgba(57,255,122,0.07); }
   .row.sel { background: rgba(255,224,102,0.12); color: var(--sel); }
-  .row.emg { color: var(--alert); }
+  .row.emg { color: var(--emg); }
+  .row.fol { color: var(--alert); background: rgba(255,59,59,0.1); }
+  #follow { cursor: pointer; display: none; }
+  #follow.show { display: block; }
+  #follow:hover { text-decoration: line-through; }
+  #detail button { margin-top: 8px; width: 100%; }
+  #detail button.fol { color: var(--alert); border-color: var(--alert); }
   .row.head { cursor: default; color: var(--phos-dim); font-size: 11px; position: sticky; top: 0; background: #031208; }
   .row span:not(:first-child) { text-align: right; }
   #controls { position: fixed; bottom: 14px; right: 334px; display: flex; gap: 6px; transition: right .25s; }
@@ -77,6 +84,7 @@
   <div id="loc">---</div>
   <div>RANGE <span id="range">--</span> NM</div>
   <div id="status" class="dim">CONNECTING…</div>
+  <div id="follow" class="alert" title="Click to stop following"></div>
 </div>
 <div class="hud" id="hud-bl">WHEEL / + − : RANGE &nbsp; CLICK : SELECT &nbsp; L : LABELS &nbsp; M : MAP &nbsp; P : PANEL &nbsp; F : FULLSCREEN</div>
 
@@ -105,6 +113,7 @@
     <label>Sweep period (s) <input type="number" min="2" max="20" step="1" id="s-sweep"></label>
     <label>Data refresh (s) <input type="number" min="3" max="60" step="1" id="s-refresh"></label>
     <label>Show aircraft on ground <input type="checkbox" id="s-ground"></label>
+    <label>Follow flight <input type="text" id="s-follow" maxlength="10" placeholder="callsign, reg or hex"></label>
     <label>Hide above FL <input type="number" min="0" max="600" step="10" id="s-maxfl" placeholder="no limit"></label>
     <div class="help">Data: community ADS-B feeds (adsb.lol, fallback adsb.fi). Range max 250 NM.</div>
     <div class="actions">
@@ -121,7 +130,7 @@
   // ---------- settings ----------
   const RANGES = [5, 10, 25, 50, 100, 150, 250];
   const DEFAULTS = { lat: 49.6233, lon: 6.2044, name: "ELLX", rangeIdx: 3, sweep: 6, refresh: 5,
-                     ground: false, maxfl: null, labels: true, map: true, panel: true, geoAsked: false };
+                     ground: false, maxfl: null, labels: true, map: true, panel: true, follow: "", geoAsked: false };
   let cfg = { ...DEFAULTS };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem("radar-cfg") || "{}")); } catch {}
   const save = () => { try { localStorage.setItem("radar-cfg", JSON.stringify(cfg)); } catch {} };
@@ -159,19 +168,22 @@
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || res.status);
       const recv = performance.now(), seen = new Set();
-      for (const a of json.ac) {
-        if (a.lat == null || a.lon == null) continue;
-        const onGround = a.alt_baro === "ground";
-        const p = planes.get(a.hex) || { hex: a.hex, trail: [], painted: null, paintedAt: -1e9 };
-        Object.assign(p, {
-          flight: (a.flight || "").trim(), reg: a.r || "", type: a.t || "", desc: a.desc || "",
-          alt: onGround ? 0 : (a.alt_baro ?? a.alt_geom ?? null), ground: onGround,
-          gs: a.gs ?? null, track: a.track ?? a.true_heading ?? null, vr: a.baro_rate ?? a.geom_rate ?? null,
-          squawk: a.squawk || "", emergency: a.emergency, lat: a.lat, lon: a.lon,
-          fixTime: recv - (a.seen_pos || 0) * 1000,
-        });
-        planes.set(a.hex, p); seen.add(a.hex);
-      }
+      for (const a of json.ac) upsert(a, recv, seen);
+      // followed flight not in the local area: look it up worldwide
+      // (throttled to every 15 s to stay within the feeds' rate limits)
+      const followHere = [...seen].some((h) => isFollowed(planes.get(h)));
+      if (cfg.follow && !followHere && Date.now() - lastFind < 15000) {
+        planes.forEach((p, h) => { if (isFollowed(p)) seen.add(h); });
+      } else if (cfg.follow && !followHere) {
+        lastFind = Date.now();
+        if (followStatus !== "found") followStatus = "searching";
+        try {
+          const f = await fetch(`/api/find?q=${encodeURIComponent(cfg.follow)}`).then((r) => r.json());
+          const ac = (f.ac || []).filter((a) => a.lat != null);
+          ac.forEach((a) => upsert(a, recv, seen));
+          followStatus = ac.length ? "found" : "notfound";
+        } catch { followStatus = "error"; }
+      } else if (cfg.follow) followStatus = "found";
       for (const [hex, p] of planes) if (!seen.has(hex) && recv - p.fixTime > 60000) planes.delete(hex);
       lastOk = Date.now(); lastErr = ""; source = json.source;
       renderList();
@@ -179,6 +191,33 @@
       lastErr = String(e.message || e);
     }
   }
+  function upsert(a, recv, seen) {
+    if (a.lat == null || a.lon == null) return;
+    const onGround = a.alt_baro === "ground";
+    const p = planes.get(a.hex) || { hex: a.hex, trail: [], painted: null, paintedAt: -1e9 };
+    Object.assign(p, {
+      flight: (a.flight || "").trim(), reg: a.r || "", type: a.t || "", desc: a.desc || "",
+      alt: onGround ? 0 : (a.alt_baro ?? a.alt_geom ?? null), ground: onGround,
+      gs: a.gs ?? null, track: a.track ?? a.true_heading ?? null, vr: a.baro_rate ?? a.geom_rate ?? null,
+      squawk: a.squawk || "", emergency: a.emergency, lat: a.lat, lon: a.lon,
+      fixTime: recv - (a.seen_pos || 0) * 1000,
+    });
+    planes.set(a.hex, p); seen.add(a.hex);
+  }
+
+  // ---------- follow ----------
+  let followStatus = "", lastFind = 0;
+  function isFollowed(p) {
+    if (!p || !cfg.follow) return false;
+    const q = cfg.follow;
+    return p.flight.toUpperCase() === q || p.reg.toUpperCase() === q || p.hex.toUpperCase() === q;
+  }
+  function setFollow(q) {
+    cfg.follow = (q || "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
+    followStatus = cfg.follow ? "searching" : ""; lastFind = 0;
+    save(); schedulePoll(); renderList();
+  }
+  const followKey = (p) => (p.flight || p.reg || p.hex).toUpperCase();
   let pollTimer;
   function schedulePoll() { clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.refresh * 1000); }
 
@@ -188,6 +227,7 @@
     return project(p.lat, p.lon, p.track, p.gs * dtH);
   }
   function visible(p) {
+    if (isFollowed(p)) return true;
     if (p.ground && !cfg.ground) return false;
     if (cfg.maxfl && p.alt != null && p.alt / 100 > cfg.maxfl) return false;
     return true;
@@ -374,17 +414,27 @@
     prevSweep = sweep;
 
     // draw targets
+    let edgeMarker = null;
     ctx.save();
     ctx.beginPath(); ctx.arc(cx, cy, R + 1, 0, Math.PI * 2); ctx.clip();
     ctx.font = "12px 'Share Tech Mono', monospace";
     for (const p of planes.values()) {
       if (!visible(p) || !p.painted) continue;
       const xy = toXY(p.painted.lat, p.painted.lon);
-      if (xy.d > range() * 1.02) continue;
+      const fol = isFollowed(p);
+      p._xy = null;
+      if (xy.d > range() * 1.02) { if (fol) edgeMarker = { p, xy }; continue; }
       const age = (nowMs - p.paintedAt) / period;
-      const glow = Math.max(0.25, 1 - age * 0.75);
       const isSel = selected === p.hex, emg = isEmergency(p);
-      const rgb = emg ? "255,69,69" : isSel ? "255,224,102" : "57,255,122";
+      const blink = emg && Math.floor(nowMs / 400) % 2 === 0;
+      const glow = fol ? Math.max(0.6, 1 - age * 0.4) : Math.max(0.25, 1 - age * 0.75) * (blink ? 0.35 : 1);
+      const rgb = fol ? "255,59,59" : emg ? "255,150,40" : isSel ? "255,224,102" : "57,255,122";
+      if (fol) {
+        ctx.strokeStyle = `rgba(${rgb},0.85)`; ctx.lineWidth = 1.5;
+        const s = 11 + Math.sin(nowMs / 250) * 1.5;
+        ctx.beginPath(); ctx.moveTo(xy.x, xy.y - s); ctx.lineTo(xy.x + s, xy.y); ctx.lineTo(xy.x, xy.y + s); ctx.lineTo(xy.x - s, xy.y); ctx.closePath(); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
 
       // trail
       p.trail.forEach((t, i) => {
@@ -412,17 +462,37 @@
       }
 
       // data block
-      if (cfg.labels || isSel || emg) {
+      if (cfg.labels || isSel || emg || fol) {
         const la = Math.max(0.45, glow);
         ctx.fillStyle = `rgba(${rgb},${la})`;
         const fl = p.ground ? "GND" : p.alt != null ? String(Math.round(p.alt / 100)).padStart(3, "0") : "---";
         const trend = p.vr > 300 ? "↑" : p.vr < -300 ? "↓" : " ";
-        ctx.fillText(p.flight || p.reg || p.hex.toUpperCase(), xy.x + 9, xy.y - 4);
-        ctx.fillText(`${fl}${trend} ${p.gs != null ? Math.round(p.gs) : "---"}`, xy.x + 9, xy.y + 9);
+        ctx.fillText(p.flight || p.reg || p.hex.toUpperCase(), xy.x + (fol ? 16 : 9), xy.y - 4);
+        ctx.fillText(`${fl}${trend} ${p.gs != null ? Math.round(p.gs) : "---"}`, xy.x + (fol ? 16 : 9), xy.y + 9);
       }
       p._xy = xy;
     }
     ctx.restore();
+
+    // followed flight outside the range: red arrow on the rim pointing at it
+    if (edgeMarker) {
+      const { p, xy } = edgeMarker, t = xy.b;
+      const ux = Math.sin(t), uy = -Math.cos(t);
+      const tipX = cx + ux * (R - 4), tipY = cy + uy * (R - 4);
+      const baseX = cx + ux * (R - 20), baseY = cy + uy * (R - 20);
+      const nx = -uy * 7, ny = ux * 7;
+      const a = 0.65 + 0.35 * Math.sin(nowMs / 250);
+      ctx.fillStyle = `rgba(255,59,59,${a})`;
+      ctx.shadowColor = "#ff3b3b"; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(baseX + nx, baseY + ny); ctx.lineTo(baseX - nx, baseY - ny); ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.font = "12px 'Share Tech Mono', monospace";
+      const txt = `${followKey(p)} ${fmt(xy.d, 0)} NM`;
+      const w = ctx.measureText(txt).width;
+      ctx.fillStyle = "rgba(255,59,59,0.95)";
+      ctx.fillText(txt, cx + ux * (R - 34 - w / 2 * Math.abs(ux)) - w / 2, cy + uy * (R - 34) + 4);
+      p._xy = { x: baseX, y: baseY };
+    }
 
     // hovered city name (large ranges only)
     if (hoverCity && cfg.map && range() >= HOVER_NAMES_FROM) {
@@ -453,6 +523,18 @@
     const ago = Math.round((Date.now() - lastOk) / 1000);
     if (lastErr && (!lastOk || ago > cfg.refresh * 3)) { st.textContent = "NO DATA · " + lastErr; st.className = "alert"; }
     else if (lastOk) { st.textContent = `LIVE · ${source} · ${ago}s`; st.className = "dim"; }
+    const fe = $("follow");
+    fe.classList.toggle("show", !!cfg.follow);
+    if (cfg.follow) {
+      const fp = [...planes.values()].find(isFollowed);
+      let txt = `FOLLOW ${cfg.follow} · `;
+      if (fp) {
+        const pos = currentPos(fp, performance.now());
+        const { d } = distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon);
+        txt += `${fmt(d, 1)} NM` + (d > range() ? " (OUT OF RANGE)" : "");
+      } else txt += { searching: "SEARCHING…", notfound: "NOT AIRBORNE / NOT FOUND", error: "LOOKUP FAILED" }[followStatus] || "SEARCHING…";
+      fe.textContent = txt + "  ✕";
+    }
   }
   const fmt = (v, dec = 0) => v == null ? "—" : Number(v).toLocaleString("de-DE", { maximumFractionDigits: dec, minimumFractionDigits: dec });
 
@@ -461,7 +543,8 @@
     return [...planes.values()].filter(visible).map((p) => {
       const pos = currentPos(p, now);
       return { p, ...distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon) };
-    }).filter((o) => o.d <= range()).sort((a, b) => a.d - b.d);
+    }).filter((o) => o.d <= range() || isFollowed(o.p))
+      .sort((a, b) => (isFollowed(b.p) - isFollowed(a.p)) || a.d - b.d);
   }
 
   function renderList() {
@@ -469,7 +552,7 @@
     $("count").textContent = items.length;
     const html = ['<div class="row head"><span>CALLSIGN</span><span>TYPE</span><span>FL</span><span>NM</span></div>'];
     for (const { p, d } of items) {
-      const cls = ["row", selected === p.hex ? "sel" : "", isEmergency(p) ? "emg" : ""].join(" ");
+      const cls = ["row", selected === p.hex ? "sel" : "", isEmergency(p) ? "emg" : "", isFollowed(p) ? "fol" : ""].join(" ");
       const fl = p.ground ? "GND" : p.alt != null ? Math.round(p.alt / 100) : "—";
       html.push(`<div class="${cls}" data-hex="${p.hex}"><span>${esc(p.flight || p.reg || p.hex.toUpperCase())}</span>` +
         `<span>${esc(p.type || "—")}</span><span>${fl}</span><span>${fmt(d, 1)}</span></div>`);
@@ -495,9 +578,16 @@
       ["ICAO hex", p.hex.toUpperCase()],
     ];
     el.className = "show";
-    el.innerHTML = `<div class="cs ${isEmergency(p) ? "alert" : ""}">${esc(p.flight || p.reg || p.hex.toUpperCase())}</div>` +
+    const html = `<div class="cs" style="${isFollowed(p) ? "color:var(--alert)" : isEmergency(p) ? "color:var(--emg)" : ""}">${esc(p.flight || p.reg || p.hex.toUpperCase())}</div>` +
       `<table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>` +
       `<div class="help"><a class="dim" target="_blank" rel="noopener" href="https://globe.adsb.lol/?icao=${p.hex}">Open on map ↗</a></div>`;
+    const btn = isFollowed(p) ? `<button class="fol" data-follow="">UNFOLLOW</button>`
+                              : `<button data-follow="${esc(followKey(p))}">FOLLOW ${esc(followKey(p))}</button>`;
+    if (!el.firstElementChild) el.innerHTML = '<div class="dinfo"></div><div class="dbtn"></div>';
+    // only touch the button when it changes, so it survives a click during the 1 s refresh
+    const [info, bt] = el.children;
+    info.innerHTML = html;
+    if (bt.innerHTML !== btn) bt.innerHTML = btn;
   }
 
   function select(hex) { selected = hex === selected ? null : hex; renderList(); }
@@ -513,6 +603,11 @@
     if (best) { select(best); if (!cfg.panel) togglePanel(); }
     else if (selected) select(selected);
   });
+  $("detail").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-follow]");
+    if (b) setFollow(b.dataset.follow);
+  });
+  $("follow").addEventListener("click", () => setFollow(""));
   canvas.addEventListener("mousemove", (e) => {
     hoverCity = null;
     if (!geo?.screen || range() < HOVER_NAMES_FROM) return;
@@ -569,6 +664,7 @@
     $("s-lat").value = cfg.lat; $("s-lon").value = cfg.lon; $("s-name").value = cfg.name;
     $("s-sweep").value = cfg.sweep; $("s-refresh").value = cfg.refresh;
     $("s-ground").checked = cfg.ground; $("s-maxfl").value = cfg.maxfl ?? "";
+    $("s-follow").value = cfg.follow || "";
     dlg.showModal();
   };
   $("s-geo").onclick = () => locate((lat, lon) => { $("s-lat").value = lat.toFixed(4); $("s-lon").value = lon.toFixed(4); $("s-name").value = "MY POSITION"; });
@@ -581,6 +677,8 @@
     cfg.refresh = Math.max(3, Math.min(60, +$("s-refresh").value || 5));
     cfg.ground = $("s-ground").checked;
     cfg.maxfl = +$("s-maxfl").value || null;
+    cfg.follow = $("s-follow").value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
+    followStatus = cfg.follow ? "searching" : ""; lastFind = 0;
     save(); applyLocation();
   });
 
