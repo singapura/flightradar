@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight Radar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #020a05;
+    --phos: #39ff7a;
+    --phos-dim: #1d8a43;
+    --phos-faint: #0f3d20;
+    --alert: #ff4545;
+    --sel: #ffe066;
+    --panel: rgba(4, 20, 10, 0.86);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--phos);
+    font-family: "Share Tech Mono", ui-monospace, Consolas, monospace; }
+  #scope { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  .crt { pointer-events: none; position: fixed; inset: 0;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.65) 100%); }
+  .hud { position: fixed; padding: 14px 18px; font-size: 14px; line-height: 1.5; text-shadow: 0 0 6px rgba(57,255,122,0.6); }
+  #hud-tl { top: 0; left: 0; }
+  #hud-bl { bottom: 0; left: 0; color: var(--phos-dim); font-size: 12px; }
+  .big { font-size: 26px; letter-spacing: 2px; }
+  .dim { color: var(--phos-dim); }
+  .alert { color: var(--alert); text-shadow: 0 0 6px rgba(255,69,69,0.7); }
+  #panel { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; background: var(--panel);
+    border-left: 1px solid var(--phos-faint); display: flex; flex-direction: column; transition: transform .25s; }
+  #panel.hidden { transform: translateX(100%); }
+  #panel h2 { margin: 0; padding: 12px 14px; font-size: 14px; font-weight: normal; letter-spacing: 2px;
+    border-bottom: 1px solid var(--phos-faint); display: flex; justify-content: space-between; }
+  #detail { padding: 12px 14px; border-bottom: 1px solid var(--phos-faint); font-size: 13px; display: none; }
+  #detail.show { display: block; }
+  #detail .cs { font-size: 22px; color: var(--sel); letter-spacing: 1px; }
+  #detail table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  #detail td { padding: 2px 0; }
+  #detail td:first-child { color: var(--phos-dim); width: 45%; }
+  #list { flex: 1; overflow-y: auto; font-size: 13px; }
+  #list::-webkit-scrollbar { width: 6px; } #list::-webkit-scrollbar-thumb { background: var(--phos-faint); }
+  .row { display: grid; grid-template-columns: 1.3fr 0.8fr 0.8fr 0.7fr; gap: 4px; padding: 5px 14px; cursor: pointer;
+    border-bottom: 1px solid rgba(15,61,32,0.5); }
+  .row:hover { background: rgba(57,255,122,0.07); }
+  .row.sel { background: rgba(255,224,102,0.12); color: var(--sel); }
+  .row.emg { color: var(--alert); }
+  .row.head { cursor: default; color: var(--phos-dim); font-size: 11px; position: sticky; top: 0; background: #031208; }
+  .row span:not(:first-child) { text-align: right; }
+  #controls { position: fixed; bottom: 14px; right: 334px; display: flex; gap: 6px; transition: right .25s; }
+  body.nopanel #controls { right: 14px; }
+  button, .btn { background: rgba(4,20,10,0.85); color: var(--phos); border: 1px solid var(--phos-dim); font: inherit;
+    font-size: 13px; padding: 6px 10px; cursor: pointer; }
+  button:hover { background: rgba(57,255,122,0.12); }
+  button.on { background: rgba(57,255,122,0.2); }
+  dialog { background: #031208; color: var(--phos); border: 1px solid var(--phos-dim); padding: 18px 20px; min-width: 340px;
+    font: inherit; }
+  dialog::backdrop { background: rgba(0,0,0,0.6); }
+  dialog h3 { margin: 0 0 12px; font-weight: normal; letter-spacing: 2px; }
+  dialog label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; font-size: 13px; }
+  dialog input[type=number], dialog input[type=text] { background: #020a05; color: var(--phos); border: 1px solid var(--phos-faint);
+    font: inherit; padding: 4px 6px; width: 150px; }
+  dialog .actions { display: flex; justify-content: space-between; margin-top: 16px; gap: 8px; }
+  .help { font-size: 12px; color: var(--phos-dim); margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<canvas id="scope"></canvas>
+<div class="crt"></div>
+
+<div class="hud" id="hud-tl">
+  <div class="big" id="clock">--:--:--</div>
+  <div class="dim" id="utc">UTC --:--</div>
+  <div id="loc">---</div>
+  <div>RANGE <span id="range">--</span> NM</div>
+  <div id="status" class="dim">CONNECTING…</div>
+</div>
+<div class="hud" id="hud-bl">WHEEL / + − : RANGE &nbsp; CLICK : SELECT &nbsp; L : LABELS &nbsp; M : MAP &nbsp; P : PANEL &nbsp; F : FULLSCREEN</div>
+
+<aside id="panel">
+  <h2><span>TRAFFIC</span><span id="count">0</span></h2>
+  <div id="detail"></div>
+  <div id="list"></div>
+</aside>
+
+<div id="controls">
+  <button id="btn-out" title="Zoom out">−</button>
+  <button id="btn-in" title="Zoom in">+</button>
+  <button id="btn-labels" class="on" title="Toggle labels (L)">LBL</button>
+  <button id="btn-map" class="on" title="Toggle borders and cities (M)">MAP</button>
+  <button id="btn-panel" title="Toggle panel (P)">LIST</button>
+  <button id="btn-full" title="Fullscreen (F)">FULL</button>
+  <button id="btn-set" title="Settings">SET</button>
+</div>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h3>SETTINGS</h3>
+    <label>Latitude <input type="number" step="0.0001" id="s-lat"></label>
+    <label>Longitude <input type="number" step="0.0001" id="s-lon"></label>
+    <label>Location name <input type="text" id="s-name" maxlength="24"></label>
+    <label>Sweep period (s) <input type="number" min="2" max="20" step="1" id="s-sweep"></label>
+    <label>Data refresh (s) <input type="number" min="3" max="60" step="1" id="s-refresh"></label>
+    <label>Show aircraft on ground <input type="checkbox" id="s-ground"></label>
+    <label>Hide above FL <input type="number" min="0" max="600" step="10" id="s-maxfl" placeholder="no limit"></label>
+    <div class="help">Data: community ADS-B feeds (adsb.lol, fallback adsb.fi). Range max 250 NM.</div>
+    <div class="actions">
+      <button type="button" id="s-geo">USE MY LOCATION</button>
+      <span><button value="cancel">CANCEL</button> <button value="ok" id="s-ok">SAVE</button></span>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- settings ----------
+  const RANGES = [5, 10, 25, 50, 100, 150, 250];
+  const DEFAULTS = { lat: 49.6233, lon: 6.2044, name: "ELLX", rangeIdx: 3, sweep: 6, refresh: 5,
+                     ground: false, maxfl: null, labels: true, map: true, panel: true, geoAsked: false };
+  let cfg = { ...DEFAULTS };
+  try { Object.assign(cfg, JSON.parse(localStorage.getItem("radar-cfg") || "{}")); } catch {}
+  const save = () => { try { localStorage.setItem("radar-cfg", JSON.stringify(cfg)); } catch {} };
+
+  // ---------- geo helpers ----------
+  const R_NM = 3440.065, D2R = Math.PI / 180;
+  function distBearing(lat1, lon1, lat2, lon2) {
+    const p1 = lat1 * D2R, p2 = lat2 * D2R, dp = p2 - p1, dl = (lon2 - lon1) * D2R;
+    const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+    const d = 2 * R_NM * Math.asin(Math.min(1, Math.sqrt(a)));
+    const y = Math.sin(dl) * Math.cos(p2);
+    const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+    return { d, b: (Math.atan2(y, x) + 2 * Math.PI) % (2 * Math.PI) };
+  }
+  function project(lat, lon, trackDeg, nm) { // dead-reckon a short distance
+    const t = trackDeg * D2R;
+    return { lat: lat + (nm * Math.cos(t)) / 60, lon: lon + (nm * Math.sin(t)) / (60 * Math.cos(lat * D2R)) };
+  }
+
+  // ---------- state ----------
+  const planes = new Map(); // hex -> plane
+  let selected = null, lastOk = 0, lastErr = "", source = "";
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("scope"), ctx = canvas.getContext("2d");
+  const bg = document.createElement("canvas"), bgx = bg.getContext("2d");
+  let W = 0, H = 0, DPR = 1, cx = 0, cy = 0, R = 0;
+
+  const range = () => RANGES[cfg.rangeIdx];
+  const isEmergency = (p) => ["7500", "7600", "7700"].includes(p.squawk) || (p.emergency && p.emergency !== "none");
+
+  // ---------- data ----------
+  async function poll() {
+    try {
+      const res = await fetch(`/api/aircraft?lat=${cfg.lat}&lon=${cfg.lon}&dist=${Math.min(250, Math.ceil(range() * 1.15))}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.status);
+      const recv = performance.now(), seen = new Set();
+      for (const a of json.ac) {
+        if (a.lat == null || a.lon == null) continue;
+        const onGround = a.alt_baro === "ground";
+        const p = planes.get(a.hex) || { hex: a.hex, trail: [], painted: null, paintedAt: -1e9 };
+        Object.assign(p, {
+          flight: (a.flight || "").trim(), reg: a.r || "", type: a.t || "", desc: a.desc || "",
+          alt: onGround ? 0 : (a.alt_baro ?? a.alt_geom ?? null), ground: onGround,
+          gs: a.gs ?? null, track: a.track ?? a.true_heading ?? null, vr: a.baro_rate ?? a.geom_rate ?? null,
+          squawk: a.squawk || "", emergency: a.emergency, lat: a.lat, lon: a.lon,
+          fixTime: recv - (a.seen_pos || 0) * 1000,
+        });
+        planes.set(a.hex, p); seen.add(a.hex);
+      }
+      for (const [hex, p] of planes) if (!seen.has(hex) && recv - p.fixTime > 60000) planes.delete(hex);
+      lastOk = Date.now(); lastErr = ""; source = json.source;
+      renderList();
+    } catch (e) {
+      lastErr = String(e.message || e);
+    }
+  }
+  let pollTimer;
+  function schedulePoll() { clearInterval(pollTimer); poll(); pollTimer = setInterval(poll, cfg.refresh * 1000); }
+
+  function currentPos(p, now) {
+    if (p.gs == null || p.track == null || p.ground) return { lat: p.lat, lon: p.lon };
+    const dtH = Math.min(30, (now - p.fixTime) / 1000) / 3600;
+    return project(p.lat, p.lon, p.track, p.gs * dtH);
+  }
+  function visible(p) {
+    if (p.ground && !cfg.ground) return false;
+    if (cfg.maxfl && p.alt != null && p.alt / 100 > cfg.maxfl) return false;
+    return true;
+  }
+
+  // ---------- drawing ----------
+  function resize() {
+    DPR = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    for (const c of [canvas, bg]) { c.width = W * DPR; c.height = H * DPR; }
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    const panelW = cfg.panel ? 320 : 0;
+    cx = (W - panelW) / 2; cy = H / 2;
+    R = Math.max(80, Math.min((W - panelW) / 2, H / 2) - 40);
+    drawBackground();
+  }
+
+  function drawBackground() {
+    const g = bgx;
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const rad = g.createRadialGradient(cx, cy, 0, cx, cy, R);
+    rad.addColorStop(0, "#06210f"); rad.addColorStop(1, "#020c06");
+    g.fillStyle = rad; g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+
+    drawMap(g);
+
+    g.strokeStyle = "rgba(57,255,122,0.22)"; g.lineWidth = 1;
+    g.font = "12px 'Share Tech Mono', monospace"; g.fillStyle = "rgba(57,255,122,0.5)";
+    const rings = 4;
+    for (let i = 1; i <= rings; i++) {
+      const r = (R * i) / rings;
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+      const label = +(range() * i / rings).toFixed(1);
+      g.fillText(label + "", cx + 4, cy - r + 13);
+    }
+    // cross hairs + 30° spokes
+    g.strokeStyle = "rgba(57,255,122,0.12)";
+    for (let a = 0; a < 360; a += 30) {
+      const t = a * D2R;
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.sin(t) * R, cy - Math.cos(t) * R); g.stroke();
+    }
+    // bezel ticks
+    g.strokeStyle = "rgba(57,255,122,0.55)";
+    for (let a = 0; a < 360; a += 5) {
+      const t = a * D2R, len = a % 30 === 0 ? 12 : a % 10 === 0 ? 7 : 4;
+      g.beginPath();
+      g.moveTo(cx + Math.sin(t) * R, cy - Math.cos(t) * R);
+      g.lineTo(cx + Math.sin(t) * (R + len), cy - Math.cos(t) * (R + len));
+      g.stroke();
+    }
+    g.fillStyle = "rgba(57,255,122,0.75)"; g.textAlign = "center"; g.textBaseline = "middle";
+    for (let a = 0; a < 360; a += 30) {
+      const t = a * D2R, lbl = { 0: "N", 90: "E", 180: "S", 270: "W" }[a] || String(a).padStart(3, "0");
+      g.fillText(lbl, cx + Math.sin(t) * (R + 24), cy - Math.cos(t) * (R + 24));
+    }
+    g.textAlign = "left"; g.textBaseline = "alphabetic";
+    g.strokeStyle = "rgba(57,255,122,0.7)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+    // own position
+    g.strokeStyle = "rgba(57,255,122,0.8)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx - 6, cy); g.lineTo(cx + 6, cy); g.moveTo(cx, cy - 6); g.lineTo(cx, cy + 6); g.stroke();
+  }
+
+  // ---------- map: country borders, coastlines, cities ----------
+  let geo = null, hoverCity = null;
+  const HOVER_NAMES_FROM = 100; // NM: from this range up, city names only show on hover
+  async function loadMap() {
+    try {
+      const [topo, cities] = await Promise.all([
+        fetch("/data/countries-10m.json").then((r) => r.json()),
+        fetch("/data/cities.json").then((r) => r.json()),
+      ]);
+      const [sx, sy] = topo.transform.scale, [tx, ty] = topo.transform.translate;
+      // arcs used by two countries are land borders, arcs used once are coastlines
+      const use = new Uint8Array(topo.arcs.length);
+      const walk = (a) => Array.isArray(a) ? a.forEach(walk) : typeof a === "number" && use[a < 0 ? ~a : a]++;
+      topo.objects.countries.geometries.forEach((g) => walk(g.arcs));
+      const arcs = topo.arcs.map((arc, i) => {
+        const pts = new Float64Array(arc.length * 2);
+        let x = 0, y = 0, x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+        arc.forEach(([dx, dy], k) => {
+          x += dx; y += dy;
+          const lon = x * sx + tx, lat = y * sy + ty;
+          pts[k * 2] = lon; pts[k * 2 + 1] = lat;
+          if (lon < x0) x0 = lon; if (lon > x1) x1 = lon; if (lat < y0) y0 = lat; if (lat > y1) y1 = lat;
+        });
+        return { pts, bbox: [x0, y0, x1, y1], border: use[i] > 1 };
+      });
+      geo = { arcs, cities };
+      drawBackground();
+    } catch (e) { console.warn("map data not loaded", e); }
+  }
+
+  function drawMap(g) {
+    if (!geo || !cfg.map) return;
+    g.save();
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.clip();
+    const latSpan = (range() * 1.5) / 60, lonSpan = latSpan / Math.max(0.05, Math.cos(cfg.lat * D2R));
+    const box = [cfg.lon - lonSpan, cfg.lat - latSpan, cfg.lon + lonSpan, cfg.lat + latSpan];
+    const hit = (b) => b[0] <= box[2] && b[2] >= box[0] && b[1] <= box[3] && b[3] >= box[1];
+    g.lineWidth = 1;
+    for (const border of [false, true]) {
+      g.beginPath();
+      for (const a of geo.arcs) {
+        if (a.border !== border || !hit(a.bbox)) continue;
+        for (let k = 0; k < a.pts.length; k += 2) {
+          const p = toXY(a.pts[k + 1], a.pts[k]);
+          k ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y);
+        }
+      }
+      g.strokeStyle = border ? "rgba(57,255,122,0.38)" : "rgba(57,255,122,0.28)";
+      g.setLineDash(border ? [5, 4] : []);
+      g.stroke();
+    }
+    g.setLineDash([]);
+
+    // cities: biggest first, skip any whose label would overlap one already drawn
+    // at large ranges only dots are drawn; names appear on hover (see frame())
+    const placed = [], maxLabels = 40, showNames = range() < HOVER_NAMES_FROM;
+    geo.screen = []; hoverCity = null;
+    g.font = "11px 'Share Tech Mono', monospace";
+    for (const [name, lat, lon, , cap] of geo.cities) {
+      if (placed.length >= maxLabels) break;
+      if (Math.abs(lat - cfg.lat) > latSpan || Math.abs(lon - cfg.lon) > lonSpan) continue;
+      const p = toXY(lat, lon);
+      if (p.d > range() * 0.97) continue;
+      const w = g.measureText(name).width;
+      const rect = [p.x - 4, p.y - 12, p.x + 7 + w, p.y + 4];
+      if (placed.some((q) => rect[0] < q[2] && rect[2] > q[0] && rect[1] < q[3] && rect[3] > q[1])) continue;
+      placed.push(rect);
+      geo.screen.push({ name: name.toUpperCase(), x: p.x, y: p.y, cap });
+      g.fillStyle = cap === 2 ? "rgba(57,255,122,0.72)" : "rgba(57,255,122,0.55)";
+      if (cap === 2) { g.strokeStyle = g.fillStyle; g.beginPath(); g.arc(p.x, p.y, 3, 0, Math.PI * 2); g.stroke(); }
+      g.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+      if (showNames) g.fillText(name.toUpperCase(), p.x + 6, p.y - 3);
+    }
+    g.restore();
+  }
+
+  function toXY(lat, lon) {
+    const { d, b } = distBearing(cfg.lat, cfg.lon, lat, lon);
+    const r = (d / range()) * R;
+    return { x: cx + Math.sin(b) * r, y: cy - Math.cos(b) * r, d, b };
+  }
+
+  let prevSweep = 0;
+  const TRAIL_ANGLE = 1.4; // radians of afterglow
+
+  function frame(nowMs) {
+    const period = cfg.sweep * 1000;
+    const sweep = ((nowMs % period) / period) * 2 * Math.PI; // clockwise from north
+
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(bg, 0, 0, W, H);
+
+    // sweep afterglow
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+    const cAng = sweep - Math.PI / 2;
+    const grad = ctx.createConicGradient(cAng - TRAIL_ANGLE, cx, cy);
+    grad.addColorStop(0, "rgba(57,255,122,0)");
+    grad.addColorStop(TRAIL_ANGLE / (2 * Math.PI), "rgba(57,255,122,0.28)");
+    grad.addColorStop(TRAIL_ANGLE / (2 * Math.PI) + 0.0001, "rgba(57,255,122,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, cAng - TRAIL_ANGLE, cAng); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(140,255,180,0.9)"; ctx.lineWidth = 2;
+    ctx.shadowColor = "#39ff7a"; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(cAng) * R, cy + Math.sin(cAng) * R); ctx.stroke();
+    ctx.restore();
+
+    // paint targets the sweep just crossed
+    const crossed = (b) => prevSweep <= sweep ? (b > prevSweep && b <= sweep) : (b > prevSweep || b <= sweep);
+    for (const p of planes.values()) {
+      if (!visible(p)) continue;
+      const pos = currentPos(p, nowMs);
+      const xy = toXY(pos.lat, pos.lon);
+      if (crossed(xy.b) || p.painted == null) {
+        if (p.painted) { p.trail.push(p.painted); if (p.trail.length > 8) p.trail.shift(); }
+        p.painted = pos; p.paintedAt = nowMs;
+      }
+    }
+    prevSweep = sweep;
+
+    // draw targets
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R + 1, 0, Math.PI * 2); ctx.clip();
+    ctx.font = "12px 'Share Tech Mono', monospace";
+    for (const p of planes.values()) {
+      if (!visible(p) || !p.painted) continue;
+      const xy = toXY(p.painted.lat, p.painted.lon);
+      if (xy.d > range() * 1.02) continue;
+      const age = (nowMs - p.paintedAt) / period;
+      const glow = Math.max(0.25, 1 - age * 0.75);
+      const isSel = selected === p.hex, emg = isEmergency(p);
+      const rgb = emg ? "255,69,69" : isSel ? "255,224,102" : "57,255,122";
+
+      // trail
+      p.trail.forEach((t, i) => {
+        const q = toXY(t.lat, t.lon);
+        ctx.fillStyle = `rgba(${rgb},${0.08 + (i / p.trail.length) * 0.25})`;
+        ctx.beginPath(); ctx.arc(q.x, q.y, 1.6, 0, Math.PI * 2); ctx.fill();
+      });
+
+      // velocity vector (1 minute ahead)
+      if (p.track != null && p.gs) {
+        const ahead = project(p.painted.lat, p.painted.lon, p.track, p.gs / 60);
+        const v = toXY(ahead.lat, ahead.lon);
+        ctx.strokeStyle = `rgba(${rgb},${glow * 0.7})`; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(xy.x, xy.y); ctx.lineTo(v.x, v.y); ctx.stroke();
+      }
+
+      // blip
+      ctx.shadowColor = `rgb(${rgb})`; ctx.shadowBlur = 10 * glow;
+      ctx.fillStyle = `rgba(${rgb},${glow})`;
+      ctx.beginPath(); ctx.arc(xy.x, xy.y, isSel ? 4.5 : 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+      if (isSel) {
+        ctx.strokeStyle = `rgba(${rgb},0.9)`;
+        ctx.strokeRect(xy.x - 9, xy.y - 9, 18, 18);
+      }
+
+      // data block
+      if (cfg.labels || isSel || emg) {
+        const la = Math.max(0.45, glow);
+        ctx.fillStyle = `rgba(${rgb},${la})`;
+        const fl = p.ground ? "GND" : p.alt != null ? String(Math.round(p.alt / 100)).padStart(3, "0") : "---";
+        const trend = p.vr > 300 ? "↑" : p.vr < -300 ? "↓" : " ";
+        ctx.fillText(p.flight || p.reg || p.hex.toUpperCase(), xy.x + 9, xy.y - 4);
+        ctx.fillText(`${fl}${trend} ${p.gs != null ? Math.round(p.gs) : "---"}`, xy.x + 9, xy.y + 9);
+      }
+      p._xy = xy;
+    }
+    ctx.restore();
+
+    // hovered city name (large ranges only)
+    if (hoverCity && cfg.map && range() >= HOVER_NAMES_FROM) {
+      const c = hoverCity;
+      ctx.font = "12px 'Share Tech Mono', monospace";
+      const w = ctx.measureText(c.name).width;
+      ctx.fillStyle = "rgba(2,12,6,0.85)";
+      ctx.fillRect(c.x + 5, c.y - 17, w + 8, 17);
+      ctx.strokeStyle = "rgba(57,255,122,0.5)"; ctx.lineWidth = 1;
+      ctx.strokeRect(c.x + 5.5, c.y - 16.5, w + 7, 16);
+      ctx.beginPath(); ctx.arc(c.x, c.y, 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "rgba(140,255,180,0.95)";
+      ctx.fillText(c.name, c.x + 9, c.y - 4);
+    }
+
+    updateHud();
+    if (selected && nowMs - lastDetail > 1000) { renderDetail(); lastDetail = nowMs; }
+    requestAnimationFrame(frame);
+  }
+  let lastDetail = 0;
+
+  // ---------- HUD / panel ----------
+  function updateHud() {
+    const d = new Date();
+    $("clock").textContent = d.toLocaleTimeString("de-DE", { hour12: false });
+    $("utc").textContent = "UTC " + d.toISOString().slice(11, 19);
+    const st = $("status");
+    const ago = Math.round((Date.now() - lastOk) / 1000);
+    if (lastErr && (!lastOk || ago > cfg.refresh * 3)) { st.textContent = "NO DATA · " + lastErr; st.className = "alert"; }
+    else if (lastOk) { st.textContent = `LIVE · ${source} · ${ago}s`; st.className = "dim"; }
+  }
+  const fmt = (v, dec = 0) => v == null ? "—" : Number(v).toLocaleString("de-DE", { maximumFractionDigits: dec, minimumFractionDigits: dec });
+
+  function sortedVisible() {
+    const now = performance.now();
+    return [...planes.values()].filter(visible).map((p) => {
+      const pos = currentPos(p, now);
+      return { p, ...distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon) };
+    }).filter((o) => o.d <= range()).sort((a, b) => a.d - b.d);
+  }
+
+  function renderList() {
+    const items = sortedVisible();
+    $("count").textContent = items.length;
+    const html = ['<div class="row head"><span>CALLSIGN</span><span>TYPE</span><span>FL</span><span>NM</span></div>'];
+    for (const { p, d } of items) {
+      const cls = ["row", selected === p.hex ? "sel" : "", isEmergency(p) ? "emg" : ""].join(" ");
+      const fl = p.ground ? "GND" : p.alt != null ? Math.round(p.alt / 100) : "—";
+      html.push(`<div class="${cls}" data-hex="${p.hex}"><span>${esc(p.flight || p.reg || p.hex.toUpperCase())}</span>` +
+        `<span>${esc(p.type || "—")}</span><span>${fl}</span><span>${fmt(d, 1)}</span></div>`);
+    }
+    $("list").innerHTML = html.join("");
+    renderDetail();
+  }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function renderDetail() {
+    const el = $("detail"), p = selected && planes.get(selected);
+    if (!p) { el.className = ""; el.innerHTML = ""; return; }
+    const pos = currentPos(p, performance.now());
+    const { d, b } = distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon);
+    const rows = [
+      ["Registration", p.reg || "—"], ["Type", (p.type || "—") + (p.desc ? " · " + p.desc : "")],
+      ["Altitude", p.ground ? "On ground" : p.alt != null ? fmt(p.alt) + " ft" : "—"],
+      ["Vertical rate", p.vr != null ? fmt(p.vr) + " ft/min" : "—"],
+      ["Ground speed", p.gs != null ? fmt(p.gs) + " kt" : "—"],
+      ["Track", p.track != null ? fmt(p.track) + "°" : "—"],
+      ["Squawk", p.squawk || "—"],
+      ["Distance", fmt(d, 1) + " NM"], ["Bearing", fmt(b / D2R) + "°"],
+      ["ICAO hex", p.hex.toUpperCase()],
+    ];
+    el.className = "show";
+    el.innerHTML = `<div class="cs ${isEmergency(p) ? "alert" : ""}">${esc(p.flight || p.reg || p.hex.toUpperCase())}</div>` +
+      `<table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>` +
+      `<div class="help"><a class="dim" target="_blank" rel="noopener" href="https://globe.adsb.lol/?icao=${p.hex}">Open on map ↗</a></div>`;
+  }
+
+  function select(hex) { selected = hex === selected ? null : hex; renderList(); }
+
+  // ---------- input ----------
+  canvas.addEventListener("click", (e) => {
+    let best = null, bestD = 14;
+    for (const p of planes.values()) {
+      if (!p._xy || !visible(p)) continue;
+      const dd = Math.hypot(p._xy.x - e.clientX, p._xy.y - e.clientY);
+      if (dd < bestD) { bestD = dd; best = p.hex; }
+    }
+    if (best) { select(best); if (!cfg.panel) togglePanel(); }
+    else if (selected) select(selected);
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    hoverCity = null;
+    if (!geo?.screen || range() < HOVER_NAMES_FROM) return;
+    let bestD = 10;
+    for (const c of geo.screen) {
+      const dd = Math.hypot(c.x - e.clientX, c.y - e.clientY);
+      if (dd < bestD) { bestD = dd; hoverCity = c; }
+    }
+  });
+  canvas.addEventListener("mouseleave", () => { hoverCity = null; });
+  $("list").addEventListener("click", (e) => { const r = e.target.closest(".row[data-hex]"); if (r) select(r.dataset.hex); });
+
+  function setRange(delta) {
+    const i = Math.max(0, Math.min(RANGES.length - 1, cfg.rangeIdx + delta));
+    if (i === cfg.rangeIdx) return;
+    cfg.rangeIdx = i; save();
+    $("range").textContent = range();
+    for (const p of planes.values()) { p.trail = []; p.painted = null; }
+    drawBackground(); schedulePoll();
+  }
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); setRange(e.deltaY > 0 ? 1 : -1); }, { passive: false });
+  function togglePanel() {
+    cfg.panel = !cfg.panel; save();
+    $("panel").classList.toggle("hidden", !cfg.panel);
+    document.body.classList.toggle("nopanel", !cfg.panel);
+    $("btn-panel").classList.toggle("on", cfg.panel);
+    resize();
+  }
+  function toggleLabels() { cfg.labels = !cfg.labels; save(); $("btn-labels").classList.toggle("on", cfg.labels); }
+  function toggleMap() { cfg.map = !cfg.map; save(); $("btn-map").classList.toggle("on", cfg.map); drawBackground(); }
+  function toggleFull() { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+
+  $("btn-in").onclick = () => setRange(-1);
+  $("btn-out").onclick = () => setRange(1);
+  $("btn-labels").onclick = toggleLabels;
+  $("btn-map").onclick = toggleMap;
+  $("btn-panel").onclick = togglePanel;
+  $("btn-full").onclick = toggleFull;
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("dialog")) return;
+    const k = e.key.toLowerCase();
+    if (k === "+" || k === "=") setRange(-1);
+    else if (k === "-") setRange(1);
+    else if (k === "l") toggleLabels();
+    else if (k === "m") toggleMap();
+    else if (k === "p") togglePanel();
+    else if (k === "f") toggleFull();
+    else if (k === "escape" && selected) select(selected);
+  });
+
+  // settings dialog
+  const dlg = $("settings");
+  $("btn-set").onclick = () => {
+    $("s-lat").value = cfg.lat; $("s-lon").value = cfg.lon; $("s-name").value = cfg.name;
+    $("s-sweep").value = cfg.sweep; $("s-refresh").value = cfg.refresh;
+    $("s-ground").checked = cfg.ground; $("s-maxfl").value = cfg.maxfl ?? "";
+    dlg.showModal();
+  };
+  $("s-geo").onclick = () => locate((lat, lon) => { $("s-lat").value = lat.toFixed(4); $("s-lon").value = lon.toFixed(4); $("s-name").value = "MY POSITION"; });
+  dlg.addEventListener("close", () => {
+    if (dlg.returnValue !== "ok") return;
+    const lat = parseFloat($("s-lat").value), lon = parseFloat($("s-lon").value);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) { cfg.lat = lat; cfg.lon = lon; }
+    cfg.name = $("s-name").value.trim() || "---";
+    cfg.sweep = Math.max(2, Math.min(20, +$("s-sweep").value || 6));
+    cfg.refresh = Math.max(3, Math.min(60, +$("s-refresh").value || 5));
+    cfg.ground = $("s-ground").checked;
+    cfg.maxfl = +$("s-maxfl").value || null;
+    save(); applyLocation();
+  });
+
+  function locate(cb) {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition((pos) => cb(pos.coords.latitude, pos.coords.longitude), () => {}, { timeout: 10000 });
+  }
+  function applyLocation() {
+    planes.clear(); selected = null;
+    $("loc").textContent = `${cfg.name} · ${fmt(cfg.lat, 4)}, ${fmt(cfg.lon, 4)}`;
+    schedulePoll();
+  }
+
+  // ---------- boot ----------
+  $("range").textContent = range();
+  $("panel").classList.toggle("hidden", !cfg.panel);
+  document.body.classList.toggle("nopanel", !cfg.panel);
+  $("btn-panel").classList.toggle("on", cfg.panel);
+  $("btn-labels").classList.toggle("on", cfg.labels);
+  $("btn-map").classList.toggle("on", cfg.map);
+  window.addEventListener("resize", resize);
+  document.fonts?.ready.then(drawBackground);
+  resize();
+  loadMap();
+  applyLocation();
+  if (!cfg.geoAsked) {
+    cfg.geoAsked = true; save();
+    locate((lat, lon) => { cfg.lat = +lat.toFixed(4); cfg.lon = +lon.toFixed(4); cfg.name = "MY POSITION"; save(); applyLocation(); });
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
