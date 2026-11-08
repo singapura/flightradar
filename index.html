@@ -39,6 +39,7 @@
   #detail { padding: 12px 14px; border-bottom: 1px solid var(--phos-faint); font-size: 13px; display: none; }
   #detail.show { display: block; }
   #detail .cs { font-size: 22px; color: var(--sel); letter-spacing: 1px; }
+  #detail .al { color: var(--phos); font-size: 14px; margin-top: -2px; }
   #detail table { width: 100%; border-collapse: collapse; margin-top: 6px; }
   #detail td { padding: 2px 0; }
   #detail td:first-child { color: var(--phos-dim); width: 45%; }
@@ -279,6 +280,13 @@
     "NCA PAC ATN AJT WGN KYE MPH AHK CAO CKK CSS SQC MSX LCO LTG TPA BBD SRR MTN GSS ABR").split(" "));
   const MIL_CALLSIGNS = /^(RCH|CNV|NATO|GAF|BAF|CTM|RRR|IAM|NAF|PLF|CFC|ASY|ASCOT|FORTE)/;
   const MIL_TYPES = new Set("K35R KC2 KC10 K46 C17 C5M C130 C30J A400 E3TF E3CF E6 P8 R135 EUFI F16 F15 F18 F35 F22 TOR RFAL M2KM H47 V22".split(" "));
+  // airline from the ICAO prefix of the callsign (Virtual Radar Server standing data, CC0)
+  let AIRLINES = {};
+  fetch("/data/airlines.json").then((r) => r.json()).then((j) => { AIRLINES = j; renderList(); }).catch(() => {});
+  function airlineOf(p) {
+    const m = (p.flight || "").toUpperCase().match(/^([A-Z]{3})\d/);
+    return (m && AIRLINES[m[1]]) || "";
+  }
   function classify(p) {
     const cs = p.flight.toUpperCase();
     if (p.dbFlags & 1 || MIL_CALLSIGNS.test(cs) || MIL_TYPES.has(p.type)) return "military";
@@ -638,7 +646,7 @@
     for (const { p, d } of items) {
       const cls = ["row", "c-" + p.cls, selected === p.hex ? "sel" : "", isEmergency(p) ? "emg" : "", isFollowed(p) ? "fol" : ""].join(" ");
       const fl = p.ground ? "GND" : p.alt != null ? Math.round(p.alt / 100) : "—";
-      html.push(`<div class="${cls}" data-hex="${p.hex}"><span>${esc(p.flight || p.reg || p.hex.toUpperCase())}</span>` +
+      html.push(`<div class="${cls}" data-hex="${p.hex}" title="${esc(airlineOf(p))}"><span>${esc(p.flight || p.reg || p.hex.toUpperCase())}</span>` +
         `<span>${esc(p.type || "—")}</span><span>${fl}</span><span>${fmt(d, 1)}</span></div>`);
     }
     $("list").innerHTML = html.join("");
@@ -676,6 +684,7 @@
     ];
     el.className = "show";
     const html = `<div class="cs" style="${isFollowed(p) ? "color:var(--alert)" : isEmergency(p) ? "color:var(--emg)" : ""}">${esc(p.flight || p.reg || p.hex.toUpperCase())}</div>` +
+      (airlineOf(p) ? `<div class="al">${esc(airlineOf(p))}</div>` : "") +
       `<table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("")}</table>` +
       `<div class="help"><a class="dim" target="_blank" rel="noopener" href="https://globe.adsb.lol/?icao=${p.hex}">Open on map ↗</a></div>`;
     const btn = isFollowed(p) ? `<button class="fol" data-follow="">UNFOLLOW</button>`
@@ -811,7 +820,7 @@
   function snapshot(p) {
     const pos = currentPos(p, performance.now());
     const { d, b } = distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon);
-    return { cls: p.cls, hex: p.hex, flight: p.flight, reg: p.reg, type: p.type, alt: p.ground ? 0 : p.alt,
+    return { cls: p.cls, hex: p.hex, flight: p.flight, airline: airlineOf(p), reg: p.reg, type: p.type, alt: p.ground ? 0 : p.alt,
              gs: p.gs, track: p.track, d, b: b / D2R, lat: pos.lat, lon: pos.lon, squawk: p.squawk };
   }
   function checkAlerts() {
@@ -861,7 +870,7 @@
     const el = document.createElement("div");
     el.className = "toast"; el.style.setProperty("--c", c.rgb);
     el.innerHTML = `<b>${c.label} ENTERED RANGE</b><span>${new Date().toLocaleTimeString("de-DE", { hour12: false })}</span>` +
-      `<div>${esc(s.flight || s.reg || s.hex.toUpperCase())} · ${esc(s.type || "type ?")} · ` +
+      `<div>${esc(s.flight || s.reg || s.hex.toUpperCase())}${s.airline ? " (" + esc(s.airline) + ")" : ""} · ${esc(s.type || "type ?")} · ` +
       `${s.alt != null ? "FL" + String(Math.round(s.alt / 100)).padStart(3, "0") : "alt ?"} · ` +
       `${fmt(s.d, 1)} NM / ${fmt(s.b)}°</div>`;
     el.onclick = () => { if (planes.has(s.hex)) { selected = null; showTab("traffic"); select(s.hex); } el.remove(); };
@@ -883,7 +892,7 @@
       const alt = e.alt == null ? "alt ?" : e.alt === 0 ? "GND" : "FL" + String(Math.round(e.alt / 100)).padStart(3, "0");
       return `<div class="le ${e.ev === "EXIT" ? "exit" : ""}" data-hex="${e.hex}" style="color:rgb(${c.rgb})">` +
         `<div class="l1"><span>${dt(e.t)}</span><span>${e.ev}</span><b>${esc(e.flight || e.reg || e.hex.toUpperCase())}</b></div>` +
-        `<div class="l2">${c.label} · ${esc(e.type || "type ?")} · ${alt} · ${fmt(e.d, 1)} NM / ${fmt(e.b)}°` +
+        `<div class="l2">${c.label}${e.airline ? " · " + esc(e.airline) : ""} · ${esc(e.type || "type ?")} · ${alt} · ${fmt(e.d, 1)} NM / ${fmt(e.b)}°` +
         `${e.dur != null ? " · " + fmt(e.dur, 1) + " min in range" : ""}</div></div>`;
     }).join("") : `<div class="le empty">No military or unknown aircraft logged yet.</div>`;
   }
@@ -904,8 +913,8 @@
     // semicolon + decimal comma so it opens directly in European Excel; timestamps stay ISO 8601 (UTC)
     const num = (v, d = 0) => v == null ? "" : Number(v).toFixed(d).replace(".", ",");
     const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
-    const head = "time_utc;event;category;callsign;registration;aircraft_type;icao_hex;altitude_ft;speed_kt;track_deg;distance_nm;bearing_deg;lat;lon;squawk;duration_min";
-    const rows = log.map((e) => [e.t, e.ev, e.cls, q(e.flight), q(e.reg), q(e.type), e.hex.toUpperCase(), num(e.alt), num(e.gs),
+    const head = "time_utc;event;category;callsign;airline;registration;aircraft_type;icao_hex;altitude_ft;speed_kt;track_deg;distance_nm;bearing_deg;lat;lon;squawk;duration_min";
+    const rows = log.map((e) => [e.t, e.ev, e.cls, q(e.flight), q(e.airline), q(e.reg), q(e.type), e.hex.toUpperCase(), num(e.alt), num(e.gs),
       num(e.track), num(e.d, 1), num(e.b), num(e.lat, 5), num(e.lon, 5), q(e.squawk), num(e.dur, 1)].join(";"));
     const blob = new Blob(["﻿" + [head, ...rows].join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
