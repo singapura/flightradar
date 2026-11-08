@@ -60,6 +60,35 @@
   .lg.off { opacity: 0.35; text-decoration: line-through; }
   .lg:hover { filter: brightness(1.3); }
   .row.fol { color: var(--alert); background: rgba(255,59,59,0.1); }
+  #toasts { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column;
+    gap: 8px; z-index: 5; width: min(420px, calc(100vw - 32px)); }
+  body:not(.nopanel) #toasts { left: calc(50% - 160px); }
+  .toast { --c: 197,140,255; background: rgba(3,14,8,0.94); border: 1px solid rgb(var(--c)); color: rgb(var(--c));
+    padding: 8px 12px; font-size: 13px; cursor: pointer; box-shadow: 0 0 18px rgba(var(--c),0.35);
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; animation: tin .25s ease-out; transition: opacity .6s; }
+  .toast b { font-weight: normal; letter-spacing: 2px; animation: tblink 0.5s steps(1) 6; }
+  .toast div { grid-column: 1 / -1; color: #d8ffe6; }
+  .toast.gone { opacity: 0; }
+  @keyframes tin { from { transform: translateY(-8px); opacity: 0; } }
+  @keyframes tblink { 50% { opacity: 0.2; } }
+  .tabs { display: flex; border-bottom: 1px solid var(--phos-faint); }
+  .tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; background: none; padding: 11px 14px;
+    font-size: 14px; letter-spacing: 2px; color: var(--phos-dim); display: flex; justify-content: space-between; }
+  .tabs button.on { color: var(--phos); border-bottom-color: var(--phos); background: rgba(57,255,122,0.06); }
+  .tab { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .tab.on { display: flex; }
+  .logbar { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; font-size: 12px;
+    border-bottom: 1px solid var(--phos-faint); }
+  .logbar button { font-size: 12px; padding: 4px 8px; }
+  #log-list { flex: 1; overflow-y: auto; font-size: 12px; }
+  #log-list::-webkit-scrollbar { width: 6px; } #log-list::-webkit-scrollbar-thumb { background: var(--phos-faint); }
+  .le { padding: 6px 14px; border-bottom: 1px solid rgba(15,61,32,0.5); cursor: pointer; line-height: 1.45; }
+  .le:hover { background: rgba(57,255,122,0.07); }
+  .le .l1 { display: grid; grid-template-columns: auto 52px 1fr; gap: 8px; font-size: 13px; }
+  .le .l1 b { font-weight: normal; text-align: right; }
+  .le .l2 { color: #b9d6c3; opacity: 0.85; }
+  .le.exit { opacity: 0.6; }
+  .le.empty { cursor: default; color: var(--phos-dim); }
   #follow { cursor: pointer; display: none; }
   #follow.show { display: block; }
   #follow:hover { text-decoration: line-through; }
@@ -100,9 +129,21 @@
 <div class="hud" id="hud-bl">WHEEL / + − : RANGE &nbsp; CLICK : SELECT &nbsp; L : LABELS &nbsp; M : MAP &nbsp; P : PANEL &nbsp; F : FULLSCREEN</div>
 
 <aside id="panel">
-  <h2><span>TRAFFIC</span><span id="count">0</span></h2>
-  <div id="detail"></div>
-  <div id="list"></div>
+  <nav class="tabs">
+    <button data-tab="traffic">TRAFFIC <span id="count">0</span></button>
+    <button data-tab="log">LOG <span id="log-n">0</span></button>
+  </nav>
+  <section id="tab-traffic" class="tab">
+    <div id="detail"></div>
+    <div id="list"></div>
+  </section>
+  <section id="tab-log" class="tab">
+    <div class="logbar">
+      <span class="dim">MILITARY + UNKNOWN</span>
+      <span><button id="log-save" title="Download the whole log as CSV">SAVE CSV</button> <button id="log-clear">CLEAR</button></span>
+    </div>
+    <div id="log-list"></div>
+  </section>
 </aside>
 
 <div id="controls">
@@ -112,6 +153,7 @@
   <button id="btn-map" class="on" title="Toggle borders and cities (M)">MAP</button>
   <button id="btn-panel" title="Toggle panel (P)">LIST</button>
   <button id="btn-full" title="Fullscreen (F)">FULL</button>
+  <button id="btn-log" title="Alert log">LOG</button>
   <button id="btn-set" title="Settings">SET</button>
 </div>
 
@@ -126,6 +168,9 @@
     <label>Show aircraft on ground <input type="checkbox" id="s-ground"></label>
     <label>Follow flight <input type="text" id="s-follow" maxlength="10" placeholder="callsign, reg or hex"></label>
     <label>Hide above FL <input type="number" min="0" max="600" step="10" id="s-maxfl" placeholder="no limit"></label>
+    <label>Alert on military flights <input type="checkbox" id="s-amil"></label>
+    <label>Alert on unknown flights <input type="checkbox" id="s-aunk"></label>
+    <label>Alert sound <input type="checkbox" id="s-asnd"></label>
     <div class="help">Data: community ADS-B feeds (adsb.lol, fallback adsb.fi). Range max 250 NM.</div>
     <div class="actions">
       <button type="button" id="s-geo">USE MY LOCATION</button>
@@ -134,6 +179,8 @@
   </form>
 </dialog>
 
+<div id="toasts"></div>
+
 <script>
 (() => {
   "use strict";
@@ -141,7 +188,8 @@
   // ---------- settings ----------
   const RANGES = [5, 10, 25, 50, 100, 150, 250];
   const DEFAULTS = { lat: 49.6233, lon: 6.2044, name: "ELLX", rangeIdx: 3, sweep: 6, refresh: 5,
-                     ground: false, maxfl: null, labels: true, map: true, panel: true, follow: "", geoAsked: false };
+                     ground: false, maxfl: null, labels: true, map: true, panel: true, follow: "", geoAsked: false,
+                     alertMil: true, alertUnk: true, alertSound: true };
   let cfg = { ...DEFAULTS };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem("radar-cfg") || "{}")); } catch {}
   const save = () => { try { localStorage.setItem("radar-cfg", JSON.stringify(cfg)); } catch {} };
@@ -196,6 +244,7 @@
         } catch { followStatus = "error"; }
       } else if (cfg.follow) followStatus = "found";
       for (const [hex, p] of planes) if (!seen.has(hex) && recv - p.fixTime > 60000) planes.delete(hex);
+      checkAlerts();
       lastOk = Date.now(); lastErr = ""; source = json.source;
       renderList();
     } catch (e) {
@@ -211,7 +260,7 @@
       alt: onGround ? 0 : (a.alt_baro ?? a.alt_geom ?? null), ground: onGround,
       gs: a.gs ?? null, track: a.track ?? a.true_heading ?? null, vr: a.baro_rate ?? a.geom_rate ?? null,
       squawk: a.squawk || "", emergency: a.emergency, lat: a.lat, lon: a.lon,
-      dbFlags: a.dbFlags || 0, fixTime: recv - (a.seen_pos || 0) * 1000,
+      dbFlags: a.dbFlags || 0, category: a.category || "", fixTime: recv - (a.seen_pos || 0) * 1000,
     });
     p.cls = classify(p);
     planes.set(a.hex, p); seen.add(a.hex);
@@ -648,7 +697,7 @@
       const dd = Math.hypot(p._xy.x - e.clientX, p._xy.y - e.clientY);
       if (dd < bestD) { bestD = dd; best = p.hex; }
     }
-    if (best) { select(best); if (!cfg.panel) togglePanel(); }
+    if (best) { if (selected !== best) showTab("traffic"); select(best); }
     else if (selected) select(selected);
   });
   $("detail").addEventListener("click", (e) => {
@@ -719,6 +768,7 @@
     $("s-sweep").value = cfg.sweep; $("s-refresh").value = cfg.refresh;
     $("s-ground").checked = cfg.ground; $("s-maxfl").value = cfg.maxfl ?? "";
     $("s-follow").value = cfg.follow || "";
+    $("s-amil").checked = cfg.alertMil; $("s-aunk").checked = cfg.alertUnk; $("s-asnd").checked = cfg.alertSound;
     dlg.showModal();
   };
   $("s-geo").onclick = () => locate((lat, lon) => { $("s-lat").value = lat.toFixed(4); $("s-lon").value = lon.toFixed(4); $("s-name").value = "MY POSITION"; });
@@ -731,6 +781,7 @@
     cfg.refresh = Math.max(3, Math.min(60, +$("s-refresh").value || 5));
     cfg.ground = $("s-ground").checked;
     cfg.maxfl = +$("s-maxfl").value || null;
+    cfg.alertMil = $("s-amil").checked; cfg.alertUnk = $("s-aunk").checked; cfg.alertSound = $("s-asnd").checked;
     cfg.follow = $("s-follow").value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
     followStatus = cfg.follow ? "searching" : ""; lastFind = 0;
     save(); applyLocation();
@@ -742,11 +793,137 @@
   }
   function applyLocation() {
     planes.clear(); selected = null;
+    watch.clear();
     $("loc").textContent = `${cfg.name} · ${fmt(cfg.lat, 4)}, ${fmt(cfg.lon, 4)}`;
     schedulePoll();
   }
 
+  // ---------- alerts + log ----------
+  // An ENTER event fires when a military/unknown aircraft first shows up inside the range,
+  // an EXIT event when it leaves the range or drops out of the data.
+  const watch = new Map(); // hex -> { enteredAt, snap }
+  const lastToast = new Map(); // hex -> time of last toast (same aircraft toasts at most every 10 min)
+  let log = [];
+  try { log = JSON.parse(localStorage.getItem("radar-log") || "[]"); } catch {}
+  const saveLog = () => { try { localStorage.setItem("radar-log", JSON.stringify(log.slice(-3000))); } catch {} };
+  const alertOn = (cls) => (cls === "military" && cfg.alertMil) || (cls === "unknown" && cfg.alertUnk);
+
+  function snapshot(p) {
+    const pos = currentPos(p, performance.now());
+    const { d, b } = distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon);
+    return { cls: p.cls, hex: p.hex, flight: p.flight, reg: p.reg, type: p.type, alt: p.ground ? 0 : p.alt,
+             gs: p.gs, track: p.track, d, b: b / D2R, lat: pos.lat, lon: pos.lon, squawk: p.squawk };
+  }
+  function checkAlerts() {
+    const now = Date.now(), inRange = new Set();
+    for (const p of planes.values()) {
+      if (!alertOn(p.cls) || (p.ground && !cfg.ground)) continue;
+      if (p.cls === "unknown" && /^C/.test(p.category || "")) continue; // ground vehicles, obstacles
+      const s = snapshot(p);
+      if (s.d > range()) continue;
+      inRange.add(p.hex);
+      if (!watch.has(p.hex)) {
+        watch.set(p.hex, { enteredAt: now, snap: s });
+        addLog({ t: new Date(now).toISOString(), ev: "ENTER", ...s });
+        if (now - (lastToast.get(p.hex) || 0) > 600000) { lastToast.set(p.hex, now); toast(p, s); }
+      } else watch.get(p.hex).snap = s;
+    }
+    for (const [hex, w] of watch) {
+      if (inRange.has(hex)) continue;
+      watch.delete(hex);
+      addLog({ t: new Date(now).toISOString(), ev: "EXIT", ...w.snap, dur: (now - w.enteredAt) / 60000 });
+    }
+  }
+  function addLog(e) {
+    log.push(e); saveLog(); updateLogBadge();
+    if (cfg.tab === "log") renderLog();
+  }
+  function updateLogBadge() { $("btn-log").textContent = `LOG ${log.length}`; $("log-n").textContent = log.length; }
+
+  // toast + beep
+  let audio;
+  function beep(cls) {
+    if (!cfg.alertSound) return;
+    try {
+      audio = audio || new AudioContext();
+      const tones = cls === "military" ? [880, 660, 880] : [520, 520];
+      tones.forEach((f, i) => {
+        const o = audio.createOscillator(), g = audio.createGain(), t0 = audio.currentTime + i * 0.18;
+        o.frequency.value = f; o.type = "square";
+        g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.08, t0 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
+        o.connect(g).connect(audio.destination); o.start(t0); o.stop(t0 + 0.16);
+      });
+    } catch {}
+  }
+  function toast(p, s) {
+    const c = CLASSES[s.cls], box = $("toasts");
+    const el = document.createElement("div");
+    el.className = "toast"; el.style.setProperty("--c", c.rgb);
+    el.innerHTML = `<b>${c.label} ENTERED RANGE</b><span>${new Date().toLocaleTimeString("de-DE", { hour12: false })}</span>` +
+      `<div>${esc(s.flight || s.reg || s.hex.toUpperCase())} · ${esc(s.type || "type ?")} · ` +
+      `${s.alt != null ? "FL" + String(Math.round(s.alt / 100)).padStart(3, "0") : "alt ?"} · ` +
+      `${fmt(s.d, 1)} NM / ${fmt(s.b)}°</div>`;
+    el.onclick = () => { if (planes.has(s.hex)) { selected = null; showTab("traffic"); select(s.hex); } el.remove(); };
+    box.prepend(el);
+    while (box.children.length > 4) box.lastChild.remove();
+    setTimeout(() => el.classList.add("gone"), 12000);
+    setTimeout(() => el.remove(), 12600);
+    beep(s.cls);
+  }
+
+  // log tab in the side panel (newest first; the newest 500 are shown, the CSV has everything)
+  const dt = (iso) => {
+    const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+    return (today ? "" : d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " ") + d.toLocaleTimeString("de-DE", { hour12: false });
+  };
+  function renderLog() {
+    $("log-list").innerHTML = log.length ? log.slice(-500).reverse().map((e) => {
+      const c = CLASSES[e.cls] || CLASSES.civilian;
+      const alt = e.alt == null ? "alt ?" : e.alt === 0 ? "GND" : "FL" + String(Math.round(e.alt / 100)).padStart(3, "0");
+      return `<div class="le ${e.ev === "EXIT" ? "exit" : ""}" data-hex="${e.hex}" style="color:rgb(${c.rgb})">` +
+        `<div class="l1"><span>${dt(e.t)}</span><span>${e.ev}</span><b>${esc(e.flight || e.reg || e.hex.toUpperCase())}</b></div>` +
+        `<div class="l2">${c.label} · ${esc(e.type || "type ?")} · ${alt} · ${fmt(e.d, 1)} NM / ${fmt(e.b)}°` +
+        `${e.dur != null ? " · " + fmt(e.dur, 1) + " min in range" : ""}</div></div>`;
+    }).join("") : `<div class="le empty">No military or unknown aircraft logged yet.</div>`;
+  }
+  function showTab(t) {
+    cfg.tab = t; save();
+    if (!cfg.panel) togglePanel();
+    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    $("tab-traffic").classList.toggle("on", t === "traffic");
+    $("tab-log").classList.toggle("on", t === "log");
+    if (t === "log") renderLog();
+  }
+  document.querySelector(".tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-tab]"); if (b) showTab(b.dataset.tab); });
+  $("log-list").addEventListener("click", (e) => {
+    const r = e.target.closest(".le[data-hex]");
+    if (r && planes.has(r.dataset.hex)) { selected = null; showTab("traffic"); select(r.dataset.hex); }
+  });
+  function saveCsv() {
+    // semicolon + decimal comma so it opens directly in European Excel; timestamps stay ISO 8601 (UTC)
+    const num = (v, d = 0) => v == null ? "" : Number(v).toFixed(d).replace(".", ",");
+    const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+    const head = "time_utc;event;category;callsign;registration;aircraft_type;icao_hex;altitude_ft;speed_kt;track_deg;distance_nm;bearing_deg;lat;lon;squawk;duration_min";
+    const rows = log.map((e) => [e.t, e.ev, e.cls, q(e.flight), q(e.reg), q(e.type), e.hex.toUpperCase(), num(e.alt), num(e.gs),
+      num(e.track), num(e.d, 1), num(e.b), num(e.lat, 5), num(e.lon, 5), q(e.squawk), num(e.dur, 1)].join(";"));
+    const blob = new Blob(["﻿" + [head, ...rows].join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `radar-log-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.csv`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  $("btn-log").onclick = () => showTab(cfg.panel && cfg.tab === "log" ? "traffic" : "log");
+  $("log-save").onclick = saveCsv;
+  $("log-clear").onclick = () => { if (confirm("Clear the whole log? Save it first if you want to keep it.")) { log = []; saveLog(); updateLogBadge(); renderLog(); } };
+
   // ---------- boot ----------
+  updateLogBadge();
+  cfg.tab = cfg.tab === "log" ? "log" : "traffic";
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === cfg.tab));
+  $("tab-traffic").classList.toggle("on", cfg.tab === "traffic");
+  $("tab-log").classList.toggle("on", cfg.tab === "log");
+  if (cfg.tab === "log") renderLog();
   $("range").textContent = range();
   $("panel").classList.toggle("hidden", !cfg.panel);
   document.body.classList.toggle("nopanel", !cfg.panel);
