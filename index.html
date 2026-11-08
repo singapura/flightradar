@@ -34,6 +34,9 @@
   #panel { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; background: var(--panel);
     border-left: 1px solid var(--phos-faint); display: flex; flex-direction: column; transition: transform .25s; }
   #panel.hidden { transform: translateX(100%); }
+  #panel-handle { position: fixed; top: 50%; right: 320px; transform: translateY(-50%); z-index: 4; width: 18px; height: 64px;
+    padding: 0; font-size: 18px; line-height: 1; border-right: 0; background: rgba(4,20,10,0.92); transition: right .25s; }
+  body.nopanel #panel-handle { right: 0; }
   #panel h2 { margin: 0; padding: 12px 14px; font-size: 14px; font-weight: normal; letter-spacing: 2px;
     border-bottom: 1px solid var(--phos-faint); display: flex; justify-content: space-between; }
   #detail { padding: 12px 14px; border-bottom: 1px solid var(--phos-faint); font-size: 13px; display: none; }
@@ -130,6 +133,7 @@
 </div>
 <div class="hud" id="hud-bl">WHEEL / + − : RANGE &nbsp; CLICK : SELECT &nbsp; L : LABELS &nbsp; M : MAP &nbsp; P : PANEL &nbsp; F : FULLSCREEN</div>
 
+<button id="panel-handle" title="Hide side bar (P)">›</button>
 <aside id="panel">
   <nav class="tabs">
     <button data-tab="traffic">TRAFFIC <span id="count">0</span></button>
@@ -153,7 +157,7 @@
   <button id="btn-in" title="Zoom in">+</button>
   <button id="btn-labels" class="on" title="Toggle labels (L)">LBL</button>
   <button id="btn-map" class="on" title="Toggle borders and cities (M)">MAP</button>
-  <button id="btn-panel" title="Toggle panel (P)">LIST</button>
+  <button id="btn-panel" title="Show or hide the side bar (P)">PANEL</button>
   <button id="btn-full" title="Fullscreen (F)">FULL</button>
   <button id="btn-log" title="Alert log">LOG</button>
   <button id="btn-set" title="Settings">SET</button>
@@ -761,7 +765,13 @@
     $("panel").classList.toggle("hidden", !cfg.panel);
     document.body.classList.toggle("nopanel", !cfg.panel);
     $("btn-panel").classList.toggle("on", cfg.panel);
+    syncHandle();
     resize();
+  }
+  function syncHandle() {
+    const h = $("panel-handle");
+    h.textContent = cfg.panel ? "›" : "‹";
+    h.title = cfg.panel ? "Hide side bar (P)" : "Show side bar (P)";
   }
   function toggleLabels() { cfg.labels = !cfg.labels; save(); $("btn-labels").classList.toggle("on", cfg.labels); }
   function toggleMap() { cfg.map = !cfg.map; save(); $("btn-map").classList.toggle("on", cfg.map); drawBackground(); }
@@ -772,6 +782,7 @@
   $("btn-labels").onclick = toggleLabels;
   $("btn-map").onclick = toggleMap;
   $("btn-panel").onclick = togglePanel;
+  $("panel-handle").onclick = togglePanel;
   $("btn-full").onclick = toggleFull;
   document.addEventListener("keydown", (e) => {
     if (e.target.closest("dialog")) return;
@@ -952,6 +963,7 @@
   $("panel").classList.toggle("hidden", !cfg.panel);
   document.body.classList.toggle("nopanel", !cfg.panel);
   $("btn-panel").classList.toggle("on", cfg.panel);
+  syncHandle();
   $("btn-labels").classList.toggle("on", cfg.labels);
   $("btn-map").classList.toggle("on", cfg.map);
   window.addEventListener("resize", resize);

@@ -32,7 +32,7 @@ The small server is needed because the public ADS-B feeds don't allow browsers t
 | Click the red FOLLOW line (top left) | Stop following |
 | `L` | Toggle aircraft labels |
 | `M` | Toggle borders and cities |
-| `P` | Toggle traffic panel |
+| `P`, PANEL button or the ‹ › handle on the side bar edge | Hide or show the side bar |
 | `F` | Fullscreen |
 | SET button | Location, sweep speed, refresh rate, filters, flight to follow |
 
