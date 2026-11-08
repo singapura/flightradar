@@ -52,6 +52,7 @@
   .row.c-cargo { color: rgb(77,201,255); }
   .row.c-military { color: rgb(197,140,255); }
   .row.c-unknown { color: rgb(168,181,173); }
+  .row.c-private { color: rgb(255,111,174); }
   .row.emg { color: var(--emg); }
   .row.sel { color: var(--sel); }
   #legend { margin-top: 10px; font-size: 13px; }
@@ -269,11 +270,13 @@
 
   // ---------- flight type ----------
   // Military: the feed's database flag (dbFlags bit 1), plus well-known military callsigns and types.
-  // Cargo: ICAO operator prefix of the callsign. Unknown: no callsign, registration or type at all.
+  // Cargo: ICAO operator prefix of the callsign. Private jet: business jet type or business aviation operator.
+  // Unknown: no callsign, registration or type at all.
   const CLASSES = {
     civilian: { label: "CIVILIAN", rgb: "57,255,122" },
     cargo:    { label: "CARGO",    rgb: "77,201,255" },
     military: { label: "MILITARY", rgb: "197,140,255" },
+    private:  { label: "PRIVATE JET", rgb: "255,111,174" },
     unknown:  { label: "UNKNOWN",  rgb: "168,181,173" },
   };
   const CARGO_OPS = new Set(("CLX ICV FDX UPS GTI ABW CKS BOX GEC DHK BCS DHX DAE SWN NPT TAY CHG ICL MNB AZG VDA ADB " +
@@ -283,6 +286,17 @@
   // airline from the ICAO prefix of the callsign (Virtual Radar Server standing data, CC0)
   let AIRLINES = {};
   fetch("/data/airlines.json").then((r) => r.json()).then((j) => { AIRLINES = j; renderList(); }).catch(() => {});
+  // ICAO type designators of business jets (Cessna Citation, Learjet, Gulfstream, Bombardier Challenger/Global,
+  // Dassault Falcon, Embraer Phenom/Legacy/Praetor, Hawker, Pilatus PC-24, HondaJet, Cirrus Vision and others)
+  const BIZJET_TYPES = new Set(("C500 C501 C510 C525 C25A C25B C25C C25M C526 C550 C551 C55B C560 C56X C650 C680 C68A C700 C750 " +
+    "LJ23 LJ24 LJ25 LJ31 LJ35 LJ40 LJ45 LJ55 LJ60 LJ70 LJ75 LJ85 " +
+    "GLF2 GLF3 GLF4 GLF5 GLF6 GA5C GA6C GA7C GA8C G150 G280 GALX ASTR " +
+    "CL30 CL35 CL60 GLEX GL5T GL6T GL7T GL8T " +
+    "FA10 FA20 FA50 FA5X FA6X FA7X FA8X F2TH F900 " +
+    "E50P E55P E545 E550 E35L " +
+    "H25A H25B H25C HA4T BE40 PRM1 PC24 HDJT SF50 EA50 MU30 WW24 G200 SBR1").split(" "));
+  // business aviation operators (NetJets, VistaJet, Flexjet, GlobeAir, Luxaviation, Jet Aviation, ...)
+  const BIZJET_OPS = new Set("NJE EJA VJT XRO LXJ GAC LXA JAS FWK TAG ABP JFA VCG SXN".split(" "));
   function airlineOf(p) {
     const m = (p.flight || "").toUpperCase().match(/^([A-Z]{3})\d/);
     return (m && AIRLINES[m[1]]) || "";
@@ -292,6 +306,7 @@
     if (p.dbFlags & 1 || MIL_CALLSIGNS.test(cs) || MIL_TYPES.has(p.type)) return "military";
     const op = cs.match(/^([A-Z]{3})\d/);
     if (op && CARGO_OPS.has(op[1])) return "cargo";
+    if (BIZJET_TYPES.has(p.type) || (op && BIZJET_OPS.has(op[1]))) return "private";
     if (!cs && !p.reg && !p.type) return "unknown";
     return "civilian";
   }
@@ -657,7 +672,7 @@
 
   // legend: counts per type within range (hidden types included), click to show/hide a type
   function renderLegend() {
-    const now = performance.now(), counts = { civilian: 0, cargo: 0, military: 0, unknown: 0 };
+    const now = performance.now(), counts = { civilian: 0, cargo: 0, military: 0, private: 0, unknown: 0 };
     for (const p of planes.values()) {
       const pos = currentPos(p, now);
       if (distBearing(cfg.lat, cfg.lon, pos.lat, pos.lon).d <= range() && (!p.ground || cfg.ground)) counts[p.cls]++;
